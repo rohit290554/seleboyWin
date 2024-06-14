@@ -9,8 +9,10 @@ from selenium.webdriver.support import expected_conditions as EC
 import os
 import requests
 import subprocess
+import logging
 
 DEFAULT_WAIT_TIME = 5  # Default waiting time in seconds
+logging.basicConfig(filename="seleboy.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def show_help():
@@ -166,32 +168,36 @@ def perform_regular_check(selected_check_type, url, selector_type, selector):
             options = webdriver.ChromeOptions()
             driver = webdriver.Chrome(options=options)
 
-            if selected_check_type == "title":
-                result = test_webpage_title(driver, url)
+            try:
+                if selected_check_type == "title":
+                    result = test_webpage_title(driver, url)
+                elif selected_check_type == "element_exists":
+                    result = check_element_exists(driver, url, selector_type, selector)
+                elif selected_check_type == "element_text":
+                    result = get_element_text(driver, url, selector_type, selector)
+                elif selected_check_type == "element_click":
+                    result = click_element(driver, url, selector_type, selector)
+                elif selected_check_type == "element_input":
+                    text = text_entry.get()
+                    result = enter_text_in_element(driver, url, selector_type, selector, text)
+                elif selected_check_type == "execute_js":
+                    script = script_entry.get()
+                    result = execute_javascript(driver, url, script)
+                else:
+                    raise ValueError("Invalid check type.")
                 messagebox.showinfo("Result", result)
-            elif selected_check_type == "element_exists":
-                result = check_element_exists(driver, url, selector_type, selector)
-                messagebox.showinfo("Result", result)
-            elif selected_check_type == "element_text":
-                result = get_element_text(driver, url, selector_type, selector)
-                messagebox.showinfo("Result", result)
-            elif selected_check_type == "element_click":
-                result = click_element(driver, url, selector_type, selector)
-                messagebox.showinfo("Result", result)
-            elif selected_check_type == "element_input":
-                text = text_entry.get()
-                result = enter_text_in_element(driver, url, selector_type, selector, text)
-                messagebox.showinfo("Result", result)
-            elif selected_check_type == "execute_js":
-                script = script_entry.get()
-                result = execute_javascript(driver, url, script)
-                messagebox.showinfo("Result", result)
-            else:
-                messagebox.showerror("Error", "Invalid check type.")
+                logging.info(result)
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
+                logging.error(f"Error performing check: {e}")
+            finally:
+                driver.quit()
         else:
             messagebox.showerror("Error", alert_message)
+            logging.error(alert_message)
     else:
         messagebox.showerror("Error", "Google Chrome version not found.")
+        logging.error("Google Chrome version not found.")
 
 
 def login_check_function(driver, url, username_value, password_value,
