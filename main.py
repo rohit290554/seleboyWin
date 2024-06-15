@@ -437,7 +437,7 @@ def fetch_selectors_from_webpage(url):
         else:
             messagebox.showerror("Error", alert_message)
     else:
-        messagebox.showerror("Error", "Google Chrome version not found.")
+        messagebox.showerror("Error", "Google Chrome version not found !!!")
 
 
 def export_to_csv(selectors):
@@ -461,7 +461,7 @@ def fetch_selectors():
             if save_to_csv:
                 export_to_csv(selectors)
             else:
-                messagebox.showinfo("Selectors", "\n".join(selectors))
+                messagebox.showinfo("Selectors", "\t".join(selectors))
 
 
 def create_rounded_button_image(width, height, radius, bg_color, fg_color, text):
