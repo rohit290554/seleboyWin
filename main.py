@@ -1,6 +1,7 @@
+import csv
 import tkinter as tk
 import zipfile
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, filedialog, simpledialog
 from selenium import webdriver
 from selenium.common import NoSuchElementException
 from selenium.webdriver.common.by import By
@@ -10,6 +11,7 @@ import os
 import requests
 import subprocess
 import logging
+from PIL import Image, ImageDraw, ImageTk, ImageFont
 
 DEFAULT_WAIT_TIME = 5  # Default waiting time in seconds
 logging.basicConfig(filename="seleboy.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -169,18 +171,18 @@ def perform_regular_check(selected_check_type, url, selector_type, selector):
             driver = webdriver.Chrome(options=options)
 
             try:
-                if selected_check_type == "title":
+                if selected_check_type == "Title":
                     result = test_webpage_title(driver, url)
-                elif selected_check_type == "element_exists":
+                elif selected_check_type == "Element Exists":
                     result = check_element_exists(driver, url, selector_type, selector)
-                elif selected_check_type == "element_text":
+                elif selected_check_type == "Element Text":
                     result = get_element_text(driver, url, selector_type, selector)
-                elif selected_check_type == "element_click":
+                elif selected_check_type == "Element Click":
                     result = click_element(driver, url, selector_type, selector)
-                elif selected_check_type == "element_input":
+                elif selected_check_type == "Element Input":
                     text = text_entry.get()
                     result = enter_text_in_element(driver, url, selector_type, selector, text)
-                elif selected_check_type == "execute_js":
+                elif selected_check_type == "Execute JavaScript":
                     script = script_entry.get()
                     result = execute_javascript(driver, url, script)
                 else:
@@ -260,7 +262,7 @@ def perform_login_check():
             driver = webdriver.Chrome(options=options)
 
             login_window = tk.Toplevel(app)
-            login_window.title("Login Check")
+            login_window.title("Perform Login Check")
 
             tk.Label(login_window, text="Username Value:").grid(row=0, column=0, sticky=tk.W)
             username_value_entry = tk.Entry(login_window)
@@ -372,7 +374,7 @@ def perform_check():
     text = text_entry.get()
     script = script_entry.get()
 
-    if selected_check_type == "login_check":
+    if selected_check_type == "Perform Login Check":
         perform_login_check()
     else:
         perform_regular_check(selected_check_type, url, selector_type, selector)
@@ -405,6 +407,90 @@ def change_chrome_version():
         messagebox.showerror("Error", alert_message)
 
 
+def fetch_selectors_from_webpage(url):
+    chrome_version = get_chrome_version()
+    if chrome_version:
+        download_path = "drivers/chrome"
+        os.makedirs(download_path, exist_ok=True)
+        webdriver_path, alert_message = download_webdriver(chrome_version, download_path)
+
+        if webdriver_path:
+            options = webdriver.ChromeOptions()
+            driver = webdriver.Chrome(options=options)
+            driver.get(url)
+
+            selectors = set()
+
+            elements = driver.find_elements(By.XPATH, "//*")
+            for element in elements:
+                if element.get_attribute("id"):
+                    selectors.add(f"id={element.get_attribute('id')}")
+                if element.get_attribute("name"):
+                    selectors.add(f"name={element.get_attribute('name')}")
+                if element.get_attribute("class"):
+                    selectors.add(f"class={element.get_attribute('class')}")
+                if element.tag_name:
+                    selectors.add(f"tag_name={element.tag_name}")
+
+            driver.quit()
+            return selectors
+        else:
+            messagebox.showerror("Error", alert_message)
+    else:
+        messagebox.showerror("Error", "Google Chrome version not found.")
+
+
+def export_to_csv(selectors):
+    filepath = filedialog.asksaveasfilename(defaultextension=".csv",
+                                            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+    if filepath:
+        with open(filepath, "w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Selector"])
+            for selector in selectors:
+                writer.writerow([selector])
+        messagebox.showinfo("Success", f"Selectors exported to {filepath}")
+
+
+def fetch_selectors():
+    url = simpledialog.askstring("Fetch Selectors", "Enter the URL:", initialvalue="http://")
+    if url:
+        selectors = fetch_selectors_from_webpage(url)
+        if selectors:
+            save_to_csv = messagebox.askyesno("Save to CSV", "Do you want to save the selectors to a CSV file?")
+            if save_to_csv:
+                export_to_csv(selectors)
+            else:
+                messagebox.showinfo("Selectors", "\n".join(selectors))
+
+
+def create_rounded_button_image(width, height, radius, bg_color, fg_color, text):
+    # Create an image with rounded corners
+    image = Image.new("RGBA", (width, height), bg_color)
+    mask = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle((0, 0, width, height), radius, fill=255)
+    image.putalpha(mask)
+
+    # Draw the text on the image
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype("impact.ttf", 16)  # Using Arial Bold font
+    text_bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    text_height = text_bbox[3] - text_bbox[1]
+    text_x = (width - text_width) // 2
+    text_y = (height - text_height) // 2
+    draw.text((text_x, text_y), text, font=font, fill=fg_color)
+
+    return ImageTk.PhotoImage(image)
+
+
+def create_rounded_button(parent, text, command, bg_color):
+    button_image = create_rounded_button_image(150, 40, 15, bg_color, "white", text)
+    button = tk.Button(parent, image=button_image, command=command, borderwidth=0)
+    button.image = button_image  # Keep a reference to the image to prevent garbage collection
+    return button
+
 app = tk.Tk()
 app.title("The SeleBoy: Web Automation Tool")
 
@@ -412,7 +498,7 @@ app.title("The SeleBoy: Web Automation Tool")
 app.resizable(False, False)
 
 # Fix window size
-app.geometry("700x320")
+app.geometry("850x320")
 
 app.grid_columnconfigure(0, weight=1)
 app.grid_columnconfigure(1, weight=1)
@@ -446,9 +532,12 @@ wait_time_entry.grid(row=1, column=1)
 wait_time_button = tk.Button(settings_frame, text="Change Wait Time", command=change_wait_time)
 wait_time_button.grid(row=1, column=2, padx=5)
 
-# SeleBoy Section
+buttons_frame = tk.LabelFrame(app, text="Buttons", padx=10, pady=10, bd=2, relief=tk.GROOVE)
+buttons_frame.grid(row=1, column=0, padx=10, pady=10, sticky=tk.W + tk.E)
+
 seleboy_frame = tk.LabelFrame(app, text="SeleBoy by rS", padx=10, pady=10, bd=2, relief=tk.GROOVE)
-seleboy_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky=tk.W + tk.E)
+seleboy_frame.grid(row=1, column=1, padx=10, pady=10, sticky=tk.W + tk.E)
+
 
 # Main Section within SeleBoy
 url_label = tk.Label(seleboy_frame, text="URL:")
@@ -460,8 +549,8 @@ check_type_label = tk.Label(seleboy_frame, text="Check Type:")
 check_type_label.grid(row=1, column=0, sticky=tk.W)
 check_type_var = tk.StringVar()
 check_type_combobox = ttk.Combobox(seleboy_frame, textvariable=check_type_var,
-                                   values=["title", "element_exists", "element_text", "element_click",
-                                           "element_input", "execute_js", "login_check"],
+                                   values=["Title", "Element Exists", "Element Text", "Element Click",
+                                           "Element Input", "Execute JavaScript", "Perform Login Check"],
                                    state="readonly")
 check_type_combobox.grid(row=1, column=1)
 
@@ -469,8 +558,8 @@ selector_type_label = tk.Label(seleboy_frame, text="Selector Type:")
 selector_type_label.grid(row=2, column=0, sticky=tk.W)
 selector_type_var = tk.StringVar()
 selector_type_combobox = ttk.Combobox(seleboy_frame, textvariable=selector_type_var,
-                                      values=["id", "name", "xpath", "css selector", "class name",
-                                              "tag name", "link text", "partial link text"],
+                                      values=["ID", "Name", "XPath", "CSS Selector", "Class Name",
+                                              "Tag Name", "Link Text", "Partial Link Text"],
                                       state="readonly")
 selector_type_combobox.grid(row=2, column=1)
 
@@ -490,13 +579,15 @@ script_entry = tk.Entry(seleboy_frame)
 script_entry.grid(row=5, column=1)
 
 # Adjust buttons to be placed beside the last two input fields
-check_button = tk.Button(seleboy_frame, text="Perform Check", command=perform_check, bg="#4CAF50", fg="white", width=15,
-                         height=2)
+check_button = create_rounded_button(buttons_frame, "Perform Check", perform_check, "#4CAF50")
 check_button.grid(row=1, column=2, rowspan=2, padx=100, pady=5)
 
-help_button = tk.Button(seleboy_frame, text="Help", command=show_help, bg="#2706FF", fg="white", width=15,
-                        height=2)
+help_button = create_rounded_button(buttons_frame, "HELP ?", show_help, "#2706FF")
 help_button.grid(row=3, column=2, padx=100, pady=5, rowspan=2)
+
+fetch_selectors_button = create_rounded_button(buttons_frame, "Fetch Selectors", fetch_selectors, "#FF6F00")
+fetch_selectors_button.grid(row=5, column=2, padx=100, pady=5, rowspan=2)
+
 update_debugging_info(get_chrome_version())
 
 app.mainloop()
