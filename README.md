@@ -1,11 +1,13 @@
 About This Tool
 
 Developer: Rohit Saxena (GitHub: Git-rohit290554)
+
+
 Version: 1.1
 
-Added a logging mechanism to track actions, errors, and results for better debugging and transparency.
-Improve the layout and usability of the GUI by aligning elements and adding more user-friendly labels and tooltips.
-Add logic to properly close the WebDriver instance after use to avoid resource leaks.
+1. Added a logging mechanism to track actions, errors, and results for better debugging and transparency.
+2. Improve the layout and usability of the GUI by aligning elements and adding more user-friendly labels and tooltips.
+3. Add logic to properly close the WebDriver instance after use to avoid resource leaks.
 
 Version: 1.0
 
