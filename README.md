@@ -2,6 +2,14 @@ About This Tool
 
 Developer: Rohit Saxena (GitHub: Git-rohit290554)
 
+Version 1.1 Stable
+
+1. Fixed first-time administration run mandatory issue
+2. Added a new frame to view the results
+3. Updated resource file location to LOCALAPPDATA
+4. Some GUI Fix
+5. Added Debug Log view button
+6. Improved error handling
 
 Version: 1.1
 
