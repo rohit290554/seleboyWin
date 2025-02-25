@@ -94,6 +94,8 @@ def show_help():
     submit button, and optionally error message selector if you want to check for login errors.
 
     For other checks, provide the URL, check type, selector type, and selector according to your requirement.
+    
+    Created by github.com/rohit290554
     """
     messagebox.showinfo("Help", help_text)
 
