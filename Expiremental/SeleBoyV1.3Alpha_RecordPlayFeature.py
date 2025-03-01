@@ -1,17 +1,33 @@
+import base64
 import csv
+import ctypes
+import json
+import logging
+import os
+import subprocess
+import threading
+import time
 import tkinter as tk
 import zipfile
-from tkinter import messagebox, ttk, filedialog, simpledialog
+from tkinter import messagebox
+from tkinter import ttk, filedialog, simpledialog
+from selenium.webdriver.common.keys import Keys
+import keyboard
+import mouse
+import requests
+from PIL import Image, ImageDraw, ImageTk, ImageFont
 from selenium import webdriver
 from selenium.common import NoSuchElementException
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import os
-import requests
-import subprocess
-import logging
-from PIL import Image, ImageDraw, ImageTk, ImageFont
+from selenium.webdriver.support.ui import WebDriverWait
+
+recorded_events = []
+recording = False
+token_dll = ctypes.CDLL("../bin/rs.dll")
+# Get the GitHub token from the DLL
+get_token = token_dll.get_token
+get_token.restype = ctypes.c_char_p  # Set return type to string
 
 DEFAULT_WAIT_TIME = 5  # Default waiting time in seconds
 local_app_data = os.getenv('LOCALAPPDATA')
@@ -20,6 +36,13 @@ os.makedirs(log_folder, exist_ok=True)
 log_file = os.path.join(log_folder, 'seleboy.log')
 
 logging.basicConfig(filename=log_file, level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+TRIAL_FILE = "trial_status.json"  # File to store installation date
+TRIAL_DAYS = 7
+
+# GitHub Configuration
+GITHUB_TOKEN = get_token().decode("utf-8")
+GITHUB_REPO = "rohit290554/seleboyLicence"
+GITHUB_FILE_PATH = "activation_codes.json"  # File path in repo
 
 
 def check_driver_status():
@@ -94,7 +117,7 @@ def show_help():
     submit button, and optionally error message selector if you want to check for login errors.
 
     For other checks, provide the URL, check type, selector type, and selector according to your requirement.
-    
+
     Created by github.com/rohit290554
     """
     messagebox.showinfo("Help", help_text)
@@ -182,10 +205,27 @@ def download_webdriver(version, driver_download_path):
 
 
 def test_webpage_title(driver, url):
+    print(url)
+    print(driver)
     update_debugging_info(get_chrome_version())
     driver.get(url)
     title = driver.title
     return "The Title is " + title
+
+
+def performance_webpage_counter(driver, url):
+    update_debugging_info(get_chrome_version())
+
+    # Measure load time
+    start_time = time.time()
+    driver.get(url)
+    end_time = time.time()
+
+    load_time = round(end_time - start_time, 2)
+    title = driver.title
+
+    print(f"Page Load Time: {load_time} seconds")
+    return f"The Title is {title} | Load Time: {load_time}s"
 
 
 def check_element_exists(driver, url, selector_type, selector):
@@ -252,6 +292,8 @@ def perform_regular_check(selected_check_type, url, selector_type, selector):
             try:
                 if selected_check_type == "Title":
                     result = test_webpage_title(driver, url)
+                elif selected_check_type == "Page Load Time Check":
+                    result = performance_webpage_counter(driver, url)
                 elif selected_check_type == "Element Exists":
                     result = check_element_exists(driver, url, selector_type, selector)
                 elif selected_check_type == "Element Text":
@@ -477,8 +519,17 @@ def perform_check():
 
 
 def update_debugging_info(version):
+    activated, license_key = is_activated()
+    license_status = "Activated" if activated else "Not Activated"
+
     debug_info_label.config(
-        text=f"Browser: Google Chrome\nVersion: {version}\nWait Time: {DEFAULT_WAIT_TIME} seconds\nWebDriver Status: {check_driver_status()}\n{driver_path()}")
+        text=f"Browser: Google Chrome\n"
+             f"Version: {version}\n"
+             f"Wait Time: {DEFAULT_WAIT_TIME} seconds\n"
+             f"WebDriver Status: {check_driver_status()}\n"
+             f"{driver_path()}\n"
+             f"License Status: {license_status}"
+    )
 
 
 def change_wait_time():
@@ -590,35 +641,265 @@ def create_rounded_button_image(width, height, radius, bg_color, fg_color, text)
 def create_rounded_button(parent, text, command, bg_color):
     button_image = create_rounded_button_image(100, 30, 15, bg_color, "white", text)
     button = tk.Button(parent, image=button_image, command=command, borderwidth=0)
-    button.image = button_image  # Keep a reference to the image to prevent garbage collection
+    button.image = button_image
     return button
+
+
+def get_trial_days_left():
+    """Checks the number of trial days left."""
+    if os.path.exists(TRIAL_FILE):
+        with open(TRIAL_FILE, "r") as file:
+            data = json.load(file)
+            install_time = data.get("install_time", 0)
+    else:
+        # First time running, store installation date
+        install_time = time.time()
+        with open(TRIAL_FILE, "w") as file:
+            json.dump({"install_time": install_time}, file)
+
+    # Calculate days left
+    elapsed_days = (time.time() - install_time) // 86400
+    return max(0, TRIAL_DAYS - int(elapsed_days))
+
+
+def fetch_activation_codes():
+    """Fetch activation codes from GitHub private repository."""
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Cache-Control": "no-cache",  # Ensure fresh data
+    }
+
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            content = response.json()["content"]
+            decoded_content = json.loads(base64.b64decode(content).decode("utf-8"))
+            return decoded_content.get("valid_codes", [])
+        else:
+            print("Error fetching activation codes:", response.text)
+            return []
+    except Exception as e:
+        print("Exception:", str(e))
+        return []
+
+
+def is_activated():
+    """Check if the software is already activated & if key is still valid on GitHub."""
+    if not os.path.exists(TRIAL_FILE):
+        return False, ""
+
+    with open(TRIAL_FILE, "r") as file:
+        data = json.load(file)
+        saved_code = data.get("license_key", "")
+
+    # Fetch latest codes from GitHub
+    valid_codes = fetch_activation_codes()
+
+    if saved_code in valid_codes:
+        return True, saved_code
+    else:
+        return False, ""  # Key is invalid
+
+
+def validate_license(code):
+    """Check if the entered activation code is valid."""
+    valid_codes = fetch_activation_codes()
+    return code in valid_codes
+
+
+def check_license_status():
+    """Check if the saved activation key is still valid on GitHub."""
+    activated, saved_code = is_activated()
+    if activated:
+        return  # License is still valid
+
+    messagebox.showwarning("License Expired",
+                           "Your license key is no longer valid! Please enter a new activation code.")
+    if os.path.exists(TRIAL_FILE):
+        os.remove(TRIAL_FILE)  # Remove invalid activation record
+    show_activation_window()
+
+
+def disable_trial_button():
+    """Disable trial button if the software is activated."""
+    if is_activated()[0]:  # Check if activated
+        trial_button.config(state=tk.DISABLED)
+
+
+def activate():
+    """Activation process."""
+    code = code_entry.get()
+    if validate_license(code):
+        messagebox.showinfo("Success", "Software activated successfully!")
+        with open(TRIAL_FILE, "w") as file:
+            json.dump({"activated": True, "license_key": code}, file)  # Save activation key
+        activation_win.destroy()
+        disable_trial_button()
+    else:
+        messagebox.showerror("Invalid", "Invalid activation code!")
+
+
+def check_trial():
+    """Check trial status and show message."""
+    activated, _ = is_activated()
+    if activated:
+        return  # Already activated
+
+    messagebox.showwarning("Trial Expired", "Your free trial has expired! Please enter an activation code.")
+    show_activation_window()
+
+
+def show_activation_window():
+    """Show activation code entry window."""
+    global activation_win, code_entry
+
+    if is_activated()[0]:
+        messagebox.showinfo("Activated", "Software is already activated!")
+        disable_trial_button()
+        return
+
+    activation_win = tk.Toplevel(app)
+    activation_win.title("Activate Software")
+
+    tk.Label(activation_win, text="Enter Activation Code:").pack(pady=10)
+
+    code_entry = tk.Entry(activation_win, width=35)
+    code_entry.pack(pady=10, padx=20, ipady=5)
+
+    tk.Button(activation_win, text="Activate", command=activate).pack(pady=10)
+
+
+def start_driver(url):
+    """Launches Chrome and opens the given URL."""
+    driver = webdriver.Chrome()  # Ensure chromedriver is in PATH
+    driver.get(url)
+    driver.maximize_window()
+
+
+def record_event(event):
+    """Capture keyboard and mouse events."""
+    if recording:
+        recorded_events.append({"time": time.time(), "event": event.name})
+        print(f"Recorded: {event.name}")
+
+
+def start_recording():
+    """Start recording user actions."""
+    global recording, recorded_events
+    recording = True
+    recorded_events = []
+    messagebox.showinfo("Recording", "Recording started! Perform actions in the browser.")
+    keyboard.hook(record_event)
+    mouse.hook(record_event)
+
+
+def stop_recording():
+    """Stop recording user actions."""
+    global recording
+    recording = False
+    keyboard.unhook(record_event)
+    mouse.unhook(record_event)
+
+    # Save recorded events to a file
+    with open("recorded_events.json", "w") as file:
+        json.dump(recorded_events, file)
+
+    messagebox.showinfo("Recording", "Recording stopped! Actions saved.")
+
+
+def play_recording(driver):
+    """Replay recorded actions on the browser."""
+    if driver is None:
+        messagebox.showerror("Error", "Start the browser before playback.")
+        return
+
+    try:
+        with open("recorded_events.json", "r") as file:
+            recorded_events = json.load(file)
+    except FileNotFoundError:
+        messagebox.showerror("Error", "No recorded events found!")
+        return
+
+    messagebox.showinfo("Playback", "Replaying recorded actions.")
+
+    start_time = recorded_events[0]["time"]
+    for event in recorded_events:
+        time.sleep(event["time"] - start_time)
+        action = event["event"]
+
+        if "click" in action:
+            mouse.click("left")
+        elif "enter" in action:
+            keyboard.press_and_release(Keys.RETURN)
+        elif "space" in action:
+            keyboard.press_and_release(Keys.SPACE)
+        else:
+            keyboard.press_and_release(action)
+
+    messagebox.showinfo("Playback", "Playback completed!")
+
+
+def start_browser(url):
+    """Launches browser with the user-provided URL."""
+    if not url.strip():  # Check if URL is empty
+        messagebox.showerror("Error", "Please enter a valid URL!")
+        return
+
+    threading.Thread(target=start_driver, args=(url,), daemon=True).start()
+    messagebox.showinfo("Browser", f"Chrome launched with URL:\n{url}")
+
+
+def open_record_play_window():
+    """Open a new window for Record & Play options."""
+    record_play_win = tk.Toplevel(app)
+    record_play_win.title("Record & Play")
+    record_play_win.geometry("350x250")
+
+    tk.Label(record_play_win, text="URL:").pack(pady=5)
+
+    global url_entry  # Make url_entry accessible
+    url_entry = tk.Entry(record_play_win, width=40)
+    url_entry.pack(pady=5)
+
+    tk.Button(record_play_win, text="Start Browser", command=lambda: start_browser(url_entry.get()), width=25).pack(
+        pady=5)
+    tk.Button(record_play_win, text="Exit", command=record_play_win.destroy, width=25).pack(pady=5)
 
 
 app = tk.Tk()
 app.title("The SeleBoy: Web Automation Tool")
-app.iconbitmap("Media/logo.ico")
+app.iconbitmap("../Media/logo.ico")
+# Check if already activated
+if os.path.exists(TRIAL_FILE):
+    with open(TRIAL_FILE, "r") as file:
+        data = json.load(file)
+        if data.get("activated", False):
+            messagebox.showinfo("Activated", "Welcome Tester!")
+        else:
+            check_trial()
+else:
+    check_trial()
+
 # Disable window resizing
 app.resizable(False, False)
 
-# Fix window size
-#app.geometry("1170x400")
-
+# Layout Configurations
 app.grid_columnconfigure(0, weight=1)
 app.grid_columnconfigure(1, weight=1)
 app.grid_rowconfigure(2, weight=1)
 
-# Adding border and title to Debugging Info and Settings sections
+# Debugging Info Frame
 debugging_frame = tk.LabelFrame(app, text="Debugging Info", padx=10, pady=10, bd=2, relief=tk.GROOVE, font="bold")
 debugging_frame.grid(row=0, column=0, padx=10, pady=10, sticky=tk.W + tk.E)
 
-settings_frame = tk.LabelFrame(app, text="Settings", padx=10, pady=10, bd=2, relief=tk.GROOVE, font="bold")
-settings_frame.grid(row=0, column=1, padx=5, pady=10, sticky=tk.W + tk.E)
-
-# Debugging Info Section
 debug_info_label = tk.Label(debugging_frame, text="Debugging Information", bg="#CCE5FF")
 debug_info_label.pack()
 
-# Settings Section
+# Settings Frame
+settings_frame = tk.LabelFrame(app, text="Settings", padx=10, pady=10, bd=2, relief=tk.GROOVE, font="bold")
+settings_frame.grid(row=0, column=1, padx=5, pady=10, sticky=tk.W + tk.E)
+
 chrome_version_label = tk.Label(settings_frame, text="Browser Version:")
 chrome_version_label.grid(row=0, column=0, sticky=tk.W)
 chrome_version_var = tk.StringVar()
@@ -637,13 +918,38 @@ wait_time_entry.grid(row=1, column=1)
 wait_time_button = tk.Button(settings_frame, text="Change Wait Time", command=change_wait_time, bg="#FFFF99")
 wait_time_button.grid(row=1, column=2, padx=5)
 
+# Buttons Frame
 buttons_frame = tk.LabelFrame(app, text="Buttons", padx=10, pady=10, bd=2, relief=tk.GROOVE, font="bold")
 buttons_frame.grid(row=1, column=0, padx=10, pady=10, sticky=tk.W + tk.E)
 
+check_button = tk.Button(buttons_frame, text="Perform Check", command=perform_check, bg="#00CC00")
+check_button.grid(row=1, column=0, padx=20, pady=10, sticky=tk.W)
+
+fetch_selectors_button = tk.Button(buttons_frame, text="Fetch Selectors", command=fetch_selectors, bg="#99FFFF")
+fetch_selectors_button.grid(row=1, column=1, padx=20, pady=10, sticky=tk.W)
+
+help_button = tk.Button(buttons_frame, text="HELP ?", command=show_help, bg="#6666FF")
+help_button.grid(row=1, column=2, padx=20, pady=10, sticky=tk.W)
+
+# Result Section within Buttons Frame
+result_frame = tk.LabelFrame(buttons_frame)
+result_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
+
+scrollbar = tk.Scrollbar(result_frame)
+scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+result_text = tk.Text(result_frame, height=10, bg="#FFFFFF", wrap=tk.WORD, yscrollcommand=scrollbar.set)
+result_text.pack(fill=tk.BOTH, expand=True)
+
+scrollbar.config(command=result_text.yview)
+result_frame.grid_propagate(False)
+buttons_frame.grid_rowconfigure(3, weight=1)
+buttons_frame.grid_columnconfigure(0, weight=1)
+
+# SeleBoy Section
 seleboy_frame = tk.LabelFrame(app, text="SeleBoy by rS", padx=10, pady=10, bd=2, relief=tk.GROOVE)
 seleboy_frame.grid(row=1, column=1, padx=10, pady=10, sticky=tk.W + tk.E)
 
-# Main Section within SeleBoy
 url_label = tk.Label(seleboy_frame, text="URL:")
 url_label.grid(row=0, column=0, sticky=tk.W)
 url_entry = tk.Entry(seleboy_frame)
@@ -653,7 +959,8 @@ check_type_label = tk.Label(seleboy_frame, text="Check Type:")
 check_type_label.grid(row=1, column=0, sticky=tk.W)
 check_type_var = tk.StringVar()
 check_type_combobox = ttk.Combobox(seleboy_frame, textvariable=check_type_var,
-                                   values=["Title", "Element Exists", "Element Text", "Element Click",
+                                   values=["Title", "Page Load Time Check", "Element Exists", "Element Text",
+                                           "Element Click",
                                            "Element Input", "Execute JavaScript", "Perform Login Check"],
                                    state="readonly")
 check_type_combobox.grid(row=1, column=1)
@@ -682,46 +989,31 @@ script_label.grid(row=5, column=0, sticky=tk.W)
 script_entry = tk.Entry(seleboy_frame)
 script_entry.grid(row=5, column=1)
 
-# Adjust buttons to be placed beside the last two input fields
-check_button = tk.Button(buttons_frame, text="Perform Check", command=perform_check, bg="#00CC00")
-check_button.grid(row=1, column=0, padx=20, pady=10, sticky=tk.W)
+# Bottom Buttons (Aligned to Left Corner Below Buttons Frame)
+bottom_buttons_frame = tk.Frame(app)
+bottom_buttons_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W)
 
-help_button = tk.Button(buttons_frame, text="HELP ?", command=show_help, bg="#6666FF")
-help_button.grid(row=1, column=1, padx=20, pady=10, sticky=tk.W)
+log_file_button = tk.Button(bottom_buttons_frame, text="Show Debug logs", command=log_file, bg="#6666FF")
+log_file_button.pack(side=tk.LEFT)
 
-fetch_selectors_button = tk.Button(buttons_frame, text="Fetch Selectors", command=fetch_selectors, bg="#99FFFF")
-fetch_selectors_button.grid(row=1)
+trial_button = tk.Button(bottom_buttons_frame, text="Check Trial", command=check_trial, bg="#FFFF00")
+trial_button.pack(side=tk.LEFT)
+check_license_status()
 
-# Create a frame for the result with scrollbar inside buttons_frame
-result_frame = tk.LabelFrame(buttons_frame)
-result_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
+activate_button = tk.Button(bottom_buttons_frame, text="Activate", command=show_activation_window, bg="#00FF00")
+activate_button.pack(side=tk.LEFT)
 
-scrollbar = tk.Scrollbar(result_frame)
-scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+Record = tk.Button(bottom_buttons_frame, text="Record & Play", command=open_record_play_window)
+Record.pack(side=tk.LEFT)
+Exit = tk.Button(bottom_buttons_frame, text="Exit", command=app.quit)
+Exit.pack(side=tk.LEFT)
 
-result_text = tk.Text(result_frame, height=10, bg="#FFFFFF", wrap=tk.WORD,
-                      yscrollcommand=scrollbar.set)
-result_text.pack(fill=tk.BOTH, expand=True)
-
-scrollbar.config(command=result_text.yview)
-result_frame.grid_propagate(False)
-buttons_frame.grid_rowconfigure(3, weight=1)
-buttons_frame.grid_columnconfigure(0, weight=1)
-
-# Add a new row and column configuration for the bottom right corner
-app.grid_rowconfigure(3, weight=1)
-app.grid_columnconfigure(2, weight=1)
-
-version_lable = tk.Label(app, text="V1.1 Stable")
-version_lable.grid(row=3, column=2, sticky=tk.SE)
-
-
-log_file = tk.Button(app, text="Show Debug logs", command=log_file, bg="#6666FF")
-log_file.grid(row=3, column=0, sticky=tk.W)
-
-
-
+# Version Label (Still at Bottom Right)
+version_label = tk.Label(app, text="V1.1 Stable")
+version_label.grid(row=3, column=1, sticky=tk.SE)
 
 update_debugging_info(get_chrome_version())
-
+# Check if already activated
+if is_activated():
+    disable_trial_button()
 app.mainloop()
